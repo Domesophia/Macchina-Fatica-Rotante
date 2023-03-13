@@ -1,0 +1,801 @@
+#!/usr/bin/python3
+from PyQt5 import uic
+from PyQt5.QtCore import QTimer
+from numpy import linspace
+from pyqtgraph.Qt import QtGui
+import pyqtgraph as pg
+import serial
+import sys
+from datetime import datetime
+import math
+import io
+import RPi.GPIO as GPIO
+import time
+import threading
+import socket
+from PyQt5.QtCore import Qt
+import csv
+
+#import sys
+#import os
+#from PySide2.QtWidgets import QWidget
+#from PySide2.QtCore import QFile
+#from PySide2.QtUiTools import QUiLoader
+from PyQt5.QtGui import QPixmap
+from PyQt5 import QtCore  # from PyQt5 import uic, QtCore
+from PyQt5.QtGui import QTransform
+# import os
+# import fcntl
+# import subprocess
+
+ip = socket.gethostbyname(socket.gethostname())
+
+counter = 0
+led_pos = 17
+led_rpm = 18
+led_kg = 22
+led_run = 23
+led_tab = 27
+
+GPIO.setmode(GPIO.BCM)
+GPIO.setwarnings(False)
+GPIO.setup(led_pos, GPIO.OUT)
+GPIO.setup(led_rpm, GPIO.OUT)
+GPIO.setup(led_kg, GPIO.OUT)
+GPIO.setup(led_run, GPIO.OUT)
+GPIO.setup(led_tab, GPIO.OUT)
+GPIO.output(led_pos, GPIO.LOW)
+GPIO.output(led_rpm, GPIO.LOW)
+GPIO.output(led_kg, GPIO.LOW)
+GPIO.output(led_run, GPIO.LOW)
+GPIO.output(led_tab, GPIO.LOW)
+
+mega = ["0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0"]
+megaold = mega
+megadev = ""
+contahash = 0
+
+focustab = 0
+direzione = 0  # 0 crescente 1 decrescente20
+windowWidth = 500
+X = linspace(0, 0, windowWidth)
+Yrpm = linspace(0, 0, windowWidth)
+Ykg = linspace(0, 0, windowWidth)
+ptr = -windowWidth
+contacicli = 0
+delaycicli = 0
+newtime = datetime.now()
+oldtime = datetime.now()
+run_led = 0
+esecuzione = 0
+kgshare = 0
+rpmshare = 0
+rpmset = 0
+kgset = 0
+timemillis = 0
+varthread = ""
+varthread_old = 0
+
+pressedA = 0
+pressedS = 0
+pressedP = 0
+pressedM = 0
+pressedU = 0
+pressedD = 0
+pressedR = 0
+
+rpmval = "500"
+kgval = "0.1"
+diametroval = "0.1"
+
+rst_pressed = 0
+boot_enc = 0
+
+tab_status = 0
+
+def is_float(n):
+    try:
+        float(n)
+    except ValueError:
+        return False
+    return True
+
+
+def is_int(n):
+    try:
+        int(n)
+    except ValueError:
+        return False
+    return True
+
+
+def uscita():
+    exit()
+    sys.exit(app.exec())
+
+
+def allarga_press():
+    global varthread, pressedA
+    pressedA = 1
+    if(varthread == ''):
+        varthread = 'a'
+    GPIO.output(led_pos, GPIO.HIGH)
+    win.lbl_ledpos.setPixmap(QtGui.QPixmap(("LEDon.png")))
+
+
+def allarga_rel():
+    global varthread, pressedA
+    pressedA = 0
+    varthread = ''
+    GPIO.output(led_pos, GPIO.LOW)
+    win.lbl_ledpos.setPixmap(QtGui.QPixmap(("LEDoff.png")))
+
+
+def stringi_press():
+    global varthread, pressedS
+    pressedS = 1
+    if(varthread == ''):
+        varthread = 's'
+    GPIO.output(led_pos, GPIO.HIGH)
+    win.lbl_ledpos.setPixmap(QtGui.QPixmap(("LEDon.png")))
+
+
+def stringi_rel():
+    global varthread, pressedS
+    pressedS = 0
+    varthread = ''
+    GPIO.output(led_pos, GPIO.LOW)
+    win.lbl_ledpos.setPixmap(QtGui.QPixmap(("LEDoff.png")))
+
+
+def piu_press():
+    global varthread, pressedP
+    pressedP = 1
+    varthread = 'p'
+
+
+def piu_rel():
+    global varthread, pressedP
+    pressedP = 0
+    varthread = 'Z'
+
+
+def meno_press():
+    global varthread, pressedM
+    pressedM = 1
+    varthread = 'm'
+
+
+def meno_rel():
+    global varthread, pressedM
+    pressedM = 0
+    varthread = 'Z'
+
+
+def up_press():
+    global varthread, pressedU
+    pressedU = 1
+    varthread = 'u'
+
+
+def up_rel():
+    global varthread, pressedU
+    pressedU = 0
+    varthread = 'Z'
+
+
+def down_press():
+    global varthread, pressedD
+    pressedD = 1
+    varthread = 'd'
+
+
+def down_rel():
+    global varthread, pressedD
+    pressedD = 0
+    varthread = 'Z'
+
+
+statoreset = 0
+
+
+def run():
+    global varthread, run_led, statoreset
+    if(varthread == ''):
+        varthread = 'r'
+        if(run_led):
+            run_led = 0
+            # statoreset = 1
+        else:
+            run_led = 1
+            # statoreset = 1
+
+
+def reset():
+    global contacicli, rpmval, kgval, diametroval, rst_pressed, run_led, statoreset
+    if(run_led):
+        run()
+    win.edt_rpmval.setText(rpmval)
+    win.edt_kgval.setText(kgval)
+    win.edt_diametroval.setText(diametroval)
+    win.lcd_cicli.display("0")
+    contacicli = 0
+    rst_pressed = 0
+    statoreset = 1
+
+
+def on_timeout():
+    GPIO.output(led_tab, GPIO.LOW)
+    win.lbl_ledtab.setPixmap(QtGui.QPixmap(("LEDoff.png")))
+    win.timer.stop()
+
+
+def tab():
+    global focustab, mega  # tabexp
+    GPIO.output(led_tab, GPIO.HIGH)
+    win.lbl_ledtab.setPixmap(QtGui.QPixmap(("LEDon.png")))
+    if(focustab == 0):
+        win.edt_kgval.setFocus()
+        win.edt_kgval.selectAll()
+        focustab = 1
+    else:
+        if(focustab == 1):
+            win.edt_diametroval.setFocus()
+            win.edt_diametroval.selectAll()
+            focustab = 2
+        else:
+            if(focustab == 2):
+                win.edt_rpmval.setFocus()
+                win.edt_rpmval.selectAll()
+                focustab = 0
+    win.timer.start()
+    mega[10] = "0"
+    mega[11] = "0"
+    mega[12] = "0"
+
+
+def export():
+    global writer, csvfile, mega  # tabexp
+    csvfile.close()
+    adesso = datetime.now()
+    timestamp = datetime.timestamp(adesso)
+    # nomecsv = '/media/ubuntu/MULTIBOOT/results'+str(timestamp)+'.csv'
+    nomecsv = '/home/ubuntu/Desktop/SalvataggiRBM/results'+str(timestamp)+'.csv'
+    csvfile = open(nomecsv, 'w')
+    writer = csv.writer(csvfile, quoting=csv.QUOTE_ALL,delimiter=";")
+    mega[10] = "0"
+    mega[11] = "0"
+    mega[12] = "0"
+
+
+def leggiseriale():
+    global mega, varthread, run_led, direzione, rpmval, kgval, diametroval
+    global rpmshare, kgshare, curve_rpm, curve_kg, ptr, Yrpm, Ykg, boot_enc
+    global pressedA, pressedS, pressedP, pressedM, pressedU, pressedD, pressedR
+    global contacicli, delaycicli, oldtime, rpmset, kgset, csvfile, counter, rst_pressed, tab_status, statoreset
+    kg = 0.0
+    rpm = 0.0
+    gyro_sx = 0.0
+    gyro_dx = 0.0
+    reset_btn = 0
+    tab_btn = 0
+    exp_btn = 0
+    piumeno_led = 0
+    sugiu_led = 0
+    pos_led = 0
+
+    tmprec = mega[10]
+    if(is_float(tmprec)):
+        exp_btn = float(tmprec)
+    tmprec = mega[6]
+    if(is_float(tmprec)):
+        kgtmp = round(float(tmprec),2)
+        kgtmp = kgtmp - 20.00
+        if((kgtmp > -100) and (kgtmp < 200)):
+            kg = kgtmp
+        else:
+            kg = kgshare
+    tmprec = mega[1]
+    if(is_float(tmprec)):
+        rpm = float(tmprec)
+        rpmshare = rpm
+    tmprec = mega[11]
+    if(is_int(tmprec)):
+        tab_btn = int(tmprec)
+    tmprec = mega[12]
+    if(is_int(tmprec)):
+        direzione = int(tmprec)
+        if(direzione != 0):
+            # rotation_decode()
+            if(tab_status == 0):
+                tab()
+                tab_status = 1
+            else:
+                tab_status += 1
+                if(tab_status > 10):
+                    tab_status = 0
+            #tab()
+    tmprec = mega[3]
+    if(is_int(tmprec)):
+        piumeno_led = int(tmprec)
+    tmprec = mega[4]
+    if(is_int(tmprec)):
+        sugiu_led = int(tmprec)
+    tmprec = mega[2]
+    if(is_int(tmprec)):
+        run_led = int(tmprec)
+    tmprec = mega[5]
+    if(is_int(tmprec)):
+        reset_btn = int(tmprec)
+    tmprec = mega[7]
+    if(is_float(tmprec)):
+        gyro_sx = float(tmprec)
+    tmprec = mega[8]
+    if(is_float(tmprec)):
+        gyro_dx = float(tmprec)
+    if(pos_led):
+        GPIO.output(led_pos, GPIO.HIGH)
+        win.lbl_ledpos.setPixmap(QtGui.QPixmap(("LEDon.png")))
+    elif((pressedA == 0) and (pressedS == 0)):
+        GPIO.output(led_pos, GPIO.LOW)
+        win.lbl_ledpos.setPixmap(QtGui.QPixmap(("LEDoff.png")))
+    if(piumeno_led):
+        GPIO.output(led_rpm, GPIO.HIGH)
+        win.lbl_ledrpm.setPixmap(QtGui.QPixmap(("LEDon.png")))
+    elif((pressedP == 0) and (pressedM == 0)):
+        GPIO.output(led_rpm, GPIO.LOW)
+        win.lbl_ledrpm.setPixmap(QtGui.QPixmap(("LEDoff.png")))
+    if(sugiu_led):
+        GPIO.output(led_kg, GPIO.HIGH)
+        win.lbl_ledkg.setPixmap(QtGui.QPixmap(("LEDon.png")))
+    elif((pressedU == 0) and (pressedD == 0)):
+        GPIO.output(led_kg, GPIO.LOW)
+        win.lbl_ledkg.setPixmap(QtGui.QPixmap(("LEDoff.png")))
+
+    if(run_led):
+        GPIO.output(led_run, GPIO.HIGH)
+        win.lbl_ledrunstop.setPixmap(QtGui.QPixmap(("LEDon.png")))
+        # Run ciclo programmato
+        if(kgshare == 0):
+            kgshare = kg
+            print("1 # Counter: ", counter, " Kg: ", kg, " Kgshare: ", kgshare)
+        if(is_float(win.edt_rpmval.text())):
+            rpmset = float(win.edt_rpmval.text())
+        else:
+            if(rpmset == 0):
+                rpmset = float(rpmval)
+            win.edt_rpmval.setText(str(round(rpmset)))
+        if(is_float(win.edt_kgval.text())):
+            kgset = float(win.edt_kgval.text())
+        else:
+            if(kgset == 0):
+                kgset = float(kgval)
+            win.edt_kgval.setText(str(round(kgset, 1)))
+
+        """if(rpm <= rpmset-1000):
+            pass
+        elif(rpm >= rpmset+1000):
+            pass
+        elif(kg <= kgset-5):"""
+
+        diff = int(kgshare-kg)
+        #print("1 # Diff: ", diff)
+        # kgshare = kg
+        # ##################################################################################
+        # ##################################################################################
+        # ##################### DIFF RANGE DI ROTTURA (ORI 10)######################################
+        # ##################################################################################
+        # ##################################################################################
+        if((diff < 10) or (contacicli == 0)):
+            #print("2 # Diff: ", diff)
+            kgshare = kg
+            counter = 0
+            if(kg > kgset+8.0):
+                if(contacicli == 0):
+                    piu_press()
+                    time.sleep(0.015)
+                    piu_rel()
+                    contacicli = 1
+                up_press()
+                time.sleep(0.3)
+                up_rel()
+                time.sleep(0.5)
+            elif(kg < kgset-8.0):
+                if(contacicli == 0):
+                    piu_press()
+                    time.sleep(0.015)
+                    piu_rel()
+                    contacicli = 1
+                down_press()
+                time.sleep(0.3)
+                down_rel()
+                time.sleep(0.5)
+                """
+                # print("Kg: ",kg," Kgset: ",kgset)
+                if((kg <= kgset+5.0) and (kg >= kgset-5.0)):
+                    print("Kg: ",kg," Kgset: ",kgset)
+                    pass
+                # elif(kg >= kgset+5):
+                #     pass"""
+            elif(contacicli == 0):
+                contacicli = 1
+            elif(contacicli == 1):
+                newtime = datetime.now()
+                difftime = str(newtime - oldtime)
+                oldtime = newtime
+                parti_time = difftime.split(".")
+                if(len(parti_time) == 2):
+                    contacicli = contacicli + (float(parti_time[1])*float(win.lcd_rpm.value()/60000000))
+                    win.lcd_cicli.display(int(contacicli))
+                date_time = newtime.strftime("%Y%m%d%H%M%S")
+                # Salva dati nel file
+                writer.writerow([str(date_time), rpm, kg, int(contacicli), gyro_sx, gyro_dx])
+            if(contacicli > 1):
+                if(delaycicli > 20):
+                    delaycicli = 0
+                    if(rpm > rpmset+150.0):
+                        meno_press()
+                        time.sleep(0.1) #ori 0.1
+                        meno_rel()
+                    elif(rpm < rpmset-150.0):
+                        piu_press()
+                        time.sleep(0.1) #ori 0.1
+                        piu_rel()
+                else:
+                    delaycicli = delaycicli + 1
+                newtime = datetime.now()
+                difftime = str(newtime - oldtime)
+                oldtime = newtime
+                parti_time = difftime.split(".")
+                if(len(parti_time) == 2):
+                    contacicli = contacicli + (float(parti_time[1])*float(win.lcd_rpm.value()/60000000))
+                    win.lcd_cicli.display(int(contacicli))
+                date_time = newtime.strftime("%Y%m%d%H%M%S")
+                # Salva dati nel file
+                writer.writerow([str(date_time), rpm, kg, int(contacicli), gyro_sx, gyro_dx])
+
+            """diff = int(kgshare-kg)
+            if(diff < 10):
+                kgshare = kg
+                counter = 0"""
+        else:
+            #print("3 # Diff: ", diff)
+            counter = counter + 1
+            print("Counter: ", counter, " Kg: ", kg, " Kgshare: ", kgshare)
+            if(counter >= 2000):
+                csvfile.close()
+                run()
+                export()
+                kgshare = 0
+                counter = 0
+                #statoreset = 1
+        # End ciclo programmato
+    else:
+        # print("Run_led_OFF ",run_led)
+        GPIO.output(led_run, GPIO.LOW)
+        win.lbl_ledrunstop.setPixmap(QtGui.QPixmap(("LEDoff.png")))
+
+    if(reset_btn):
+        # print("Reset:", rst_pressed)
+        rst_pressed = rst_pressed + 1
+        if(rst_pressed == 10):
+            # print("Rst_pressed")
+            reset()
+    else:
+        rst_pressed = 0
+
+    if(tab_btn):
+        direzione = 2
+        rotation_decode()
+        """if(tab_status == 0):
+            tab()
+            tab_status = 1
+        else:
+            tab_status += 1
+            if(tab_status > 5):
+                tab_status = 0"""
+
+    if(exp_btn):
+        # export()
+        direzione = 1
+        rotation_decode()
+
+    # gyro_dx = (float(gyro_dx)/1000.0)-2.0
+    # win.lcd_angolodxval.display(gyro_sx)
+    # win.lcd_angolosxval.display(gyro_dx)
+
+    pixmap_rotatedsx = win.pixmapsx.transformed(QTransform().rotate(gyro_sx), QtCore.Qt.SmoothTransformation)
+    immaginesx.setPixmap(pixmap_rotatedsx)
+    pixmap_rotateddx = win.pixmapdx.transformed(QTransform().rotate(gyro_dx), QtCore.Qt.SmoothTransformation)
+    immaginedx.setPixmap(pixmap_rotateddx)
+
+
+    kg = str(kg)
+    kg_spl = kg.split(".")
+    if(len(kg_spl) == 1):  # non ha cifre decimali
+        kg = kg+".00"
+    else:
+        if (len(kg_spl[1]) < 2):  # 1 cifra decimale
+            kg = kg+"0"
+        if (len(kg_spl[1]) > 2):
+            kg = kg_spl[0]+"."+kg_spl[1][:2]
+    win.lcd_kg.display(kg)
+    win.lcd_rpm.display(rpm)
+    Yrpm[:-1] = Yrpm[1:]
+    Yrpm[-1] = int(rpm)
+    Ykg[:-1] = Ykg[1:]
+    Ykg[-1] = float(kg)
+    ptr += 1
+    curve_rpm.setData(Yrpm)
+    curve_rpm.setPos(ptr, 0)
+    curve_kg.setData(Ykg)
+    curve_kg.setPos(ptr, 0)
+    sigma = 0
+    if("".join(win.edt_diametroval.text().split(".")).isdecimal()):
+        if(float(win.edt_diametroval.text()) > 0):
+            sigma_num = 12556.8*float(win.lcd_kg.value())
+            sigma_base = float(win.edt_diametroval.text())
+            sigma_den = math.pi*(math.pow(sigma_base, 3))
+            sigma = sigma_num/sigma_den
+            # (12556.8*float(win.lcd_kg.value()))/(math.pi*(math.pow(float(win.edt_diametroval.text()),3)))
+            f = io.StringIO()
+            print(f'{sigma:.3E}', file=f)
+            sigma = f.getvalue()
+    win.lcd_sigma.display(sigma)
+    QtGui.QApplication.processEvents()
+
+
+def read_serial(port, baud, var):
+    global mega, megaold, varthread, varthread_old, ser, statoreset
+    ser = serial.Serial()
+    ser.port = port
+    ser.baudrate = baud
+    ser.bytesize = serial.EIGHTBITS
+    ser.parity = serial.PARITY_NONE
+    ser.stopbits = serial.STOPBITS_ONE
+    ser.read_timeout = 0 #None  # 0
+    ser.xonxoff = False
+    ser.rtscts = False
+    ser.dsrdtr = False
+    ser.write_timeout = None
+    try:
+        ser.open()
+    except Exception as e:
+        print("Errore apertura porta seriale: " + str(e))
+        exit()
+    if ser.isOpen():
+        c = ""
+        try:
+            while True:
+                if(statoreset):
+                    break
+                else:
+                    invia = 0
+                    #if(((varthread == 'a') or (varthread == 's') or (varthread == 'X')) and (var == "3")):
+                    #    invia = 1
+                    if(((varthread == 'a') or (varthread == 's') or (varthread == 'p') or (varthread == 'm') or (varthread == 'u') or (varthread == 'd') or (varthread == 'r') or (varthread == 'Z')) and (var == "1")):
+                        invia = 1
+                    #if((varthread == 'Y') and (var == "2")):
+                    #    invia = 1
+                    if(invia):
+                        newtime = datetime.now()
+                        date_time = newtime.strftime("%Y%m%d%H%M%S")
+                        print(date_time, varthread, var)
+                        ser.flushInput()
+                        if(varthread == 'r'):
+                            ser.write(str.encode(varthread))
+                            varthread = ''
+                            varthread_old = varthread
+                            """elif(varthread == 'Y'):
+                            ser.write(str.encode(varthread))
+                            ser.write(str.encode(varthread))
+                            ser.write(str.encode(varthread))
+                            ser.write(str.encode(varthread))
+                            ser.write(str.encode(varthread))
+                            varthread = ''
+                            varthread_old = varthread"""
+                        else:
+                            if(varthread != varthread_old):
+                                if((varthread == 'a') or (varthread == 's')):
+                                    GPIO.output(led_pos, GPIO.HIGH)
+                                    win.lbl_ledpos.setPixmap(QtGui.QPixmap(("LEDon.png")))
+                                if((varthread == 'p') or (varthread == 'm')):
+                                    GPIO.output(led_rpm, GPIO.HIGH)
+                                    win.lbl_ledrpm.setPixmap(QtGui.QPixmap(("LEDon.png")))
+                                if((varthread == 'u') or (varthread == 'd')):
+                                    GPIO.output(led_kg, GPIO.HIGH)
+                                    win.lbl_ledkg.setPixmap(QtGui.QPixmap(("LEDon.png")))
+                                if(varthread == 'Z'):
+                                    GPIO.output(led_pos, GPIO.LOW)
+                                    win.lbl_ledpos.setPixmap(QtGui.QPixmap(("LEDoff.png")))
+                                    GPIO.output(led_rpm, GPIO.LOW)
+                                    win.lbl_ledrpm.setPixmap(QtGui.QPixmap(("LEDoff.png")))
+                                    GPIO.output(led_kg, GPIO.LOW)
+                                    win.lbl_ledkg.setPixmap(QtGui.QPixmap(("LEDoff.png")))
+                                varthread_old = varthread
+                                for x in range(5):
+                                    ser.write(str.encode(varthread))
+                                varthread = ''
+                        ser.flushOutput()
+                    else:
+                        c = ser.readline()
+                        if len(c) > 0:
+                            mega = c.decode("utf-8", "ignore").rstrip().split("#")
+                            if((len(mega) != 13) or (mega[1] == "") or (mega[2] == "") or (mega[3] == "") or (mega[4] == "") or (mega[5] == "") or (mega[6] == "") or (mega[7] == "") or (mega[8] == "") or (mega[9] == "") or (mega[10] == "") or (mega[11] == "") or (mega[12] == "")):
+                                mega = megaold
+                            else:
+                                megaold = mega
+        except Exception as e1:
+            print("Errore communicazione...: ", str(var), str(c), str(e1))
+            # ser.close()
+            # ser.open()
+            pass
+    else:
+        print("Impossibile aprire la porta seriale ")
+        pass
+        # exit()
+
+
+def rotation_decode():
+    global direzione, focustab, mega  # tabexp
+    if(focustab == 0):
+        if(direzione == 2):
+            valoreletto = int(win.edt_rpmval.text())+100
+            if(valoreletto > 11800):
+                valoreletto = 11800
+            win.edt_rpmval.setText(str(valoreletto))
+        elif(direzione == 1):
+            valoreletto = int(win.edt_rpmval.text())-100
+            if(valoreletto < 500):
+                valoreletto = 500
+            win.edt_rpmval.setText(str(valoreletto))
+    elif(focustab == 1):
+        if(direzione == 2):
+            valoreletto = round((float(win.edt_kgval.text())+0.1),1)
+            if(valoreletto > 200.0):
+                valoreletto = 200.0
+            valoreletto = str(valoreletto)
+            valoreletto_spl = valoreletto.split(".")
+            if(len(valoreletto_spl) == 1):  # non ha cifre decimali
+                valoreletto = valoreletto+".0"
+            else:
+                if (len(valoreletto_spl[1]) > 1):
+                    valoreletto = valoreletto_spl[0]+"."+valoreletto_spl[1][:1]
+            win.edt_kgval.setText(str(valoreletto))
+        elif(direzione == 1):
+            valoreletto = round((float(win.edt_kgval.text())-0.1),1)
+            if(valoreletto < 0.0):
+                valoreletto = 0.0
+            valoreletto = str(valoreletto)
+            valoreletto_spl = valoreletto.split(".")
+            if(len(valoreletto_spl) == 1):  # non ha cifre decimali
+                valoreletto = valoreletto+".0"
+            else:
+                if (len(valoreletto_spl[1]) > 1):
+                    valoreletto = v20aloreletto_spl[0]+"."+valoreletto_spl[1][:1]
+            win.edt_kgval.setText(str(valoreletto))
+    elif(focustab == 2):
+        if(direzione == 2):
+            valoreletto = round((float(win.edt_diametroval.text())+0.1),1)
+            valoreletto = str(valoreletto)
+            valoreletto_spl = valoreletto.split(".")
+            if(len(valoreletto_spl) == 1):  # non ha cifre decimali
+                valoreletto = valoreletto+".0"
+            else:
+                if (len(valoreletto_spl[1]) > 1):
+                    valoreletto = valoreletto_spl[0]+"."+valoreletto_spl[1][:1]
+            win.edt_diametroval.setText(str(valoreletto))
+        elif(direzione == 1):
+            valoreletto = round((float(win.edt_diametroval.text())-0.1),1)
+            if(valoreletto < 0.0):
+                valoreletto = 0.0
+            valoreletto = str(valoreletto)
+            valoreletto_spl = valoreletto.split(".")
+            if(len(valoreletto_spl) == 1):  # non ha cifre decimali
+                valoreletto = valoreletto+".0"
+            else:
+                if (len(valoreletto_spl[1]) > 1):
+                    valoreletto = valoreletto_spl[0]+"."+valoreletto_spl[1][:1]
+            win.edt_diametroval.setText(str(valoreletto))
+    # tabexp = "0#0#0"
+    mega[10] = "0"
+    mega[11] = "0"
+    mega[12] = "0"
+    return
+
+
+try:
+    adesso = datetime.now()
+    timestamp = datetime.timestamp(adesso)
+    # nomecsv = '/media/ubuntu/MULTIBOOT/results'+str(timestamp)+'.csv'
+    nomecsv = '/home/ubuntu/Desktop/SalvataggiRBM/results'+str(timestamp)+'.csv'
+    csvfile = open(nomecsv, 'w')
+    writer = csv.writer(csvfile, quoting=csv.QUOTE_ALL, delimiter=";")
+    app = QtGui.QApplication([])
+    win = uic.loadUi("form.ui")
+
+    immaginesx = win.mand_sx
+    immaginedx = win.mand_dx
+    win.pixmapsx = QPixmap(immaginesx.pixmap())
+    win.pixmapdx = QPixmap(immaginedx.pixmap())
+
+    p_rpm = win.graph_rpm
+    p_kg = win.graph_kg
+    p_rpm.setBackground('w')
+    p_kg.setBackground('w')
+    pen_rpm = pg.mkPen(color=(255, 0, 0))
+    pen_kg = pg.mkPen(color=(0, 0, 255))
+    label_style = {'color': 'black', 'font-size': '14pt'}
+    p_rpm.setLabel('bottom', "RPM/DIV", **label_style)
+    p_kg.setLabel('bottom', "Kg/DIV", **label_style)
+    p_rpm.setYRange(0, 13000, padding=0)
+    p_kg.setYRange(-250, 250, padding=0)
+    curve_rpm = p_rpm.plot(X, Yrpm, pen=pen_rpm)
+    curve_kg = p_kg.plot(X, Ykg, pen=pen_kg)
+    win.btn_allarga.pressed.connect(allarga_press)
+    win.btn_allarga.released.connect(allarga_rel)
+    win.btn_stringi.pressed.connect(stringi_press)
+    win.btn_stringi.released.connect(stringi_rel)
+    win.btn_rpmpiu.pressed.connect(piu_press)
+    win.btn_rpmpiu.released.connect(piu_rel)
+    win.btn_rpmmeno.pressed.connect(meno_press)
+    win.btn_rpmmeno.released.connect(meno_rel)
+    win.btn_kgsu.pressed.connect(up_press)
+    win.btn_kgsu.released.connect(up_rel)
+    win.btn_kggiu.pressed.connect(down_press)
+    win.btn_kggiu.released.connect(down_rel)
+    win.btn_runstop.clicked.connect(run)
+    win.btn_reset.clicked.connect(reset)
+    win.btn_tab.clicked.connect(tab)
+    win.btn_export.clicked.connect(export)
+    win.btn_uscita.clicked.connect(uscita)
+    win.lbl_ip.setText(ip)
+    win.timer = QTimer()
+    win.timer.setInterval(100)  # 1000)  # 100 ms
+    win.timer.timeout.connect(on_timeout)
+    win.setWindowFlags(Qt.CustomizeWindowHint | Qt.FramelessWindowHint | Qt.Dialog)  # | Qt.WindowStaysOnTopHint | Qt.Tool)
+    win.showFullScreen()
+    win.show()
+    win.edt_rpmval.selectAll()
+
+    try:
+        ser = ""
+        ser = serial.Serial('/dev/ttyACM0', 115200)
+        if(ser != ""):
+            print("Porta aperta: ACM0")
+            while(contahash < 10):
+                leggistringa = ser.readline()
+                stringapulita = leggistringa.decode("utf-8", "ignore").rstrip()
+                parti = stringapulita.split("#")
+                count = len(parti)
+                time.sleep(0.1)
+                contahash = contahash + 1
+            contahash = 0
+            print(count)
+            if(count == 13):
+                megadev = "/dev/ttyACM0"
+            ser.close()
+    except Exception as e:
+        print("Errore apertura porta seriale: " + str(e))
+        # exit(1)
+
+    print("Mega: ", megadev)
+
+    try:
+        print("Avvio thread")
+        # Mega
+        t = threading.Thread(target=read_serial, args=(megadev, "115200", "1"))
+        t.daemon = True
+        t.start()
+    except Exception as e:
+        print("Errore: impossibile avviare thread " + str(e))
+    while True:
+        leggiseriale()
+        if(statoreset):
+            time.sleep(3)
+            t = threading.Thread(target=read_serial, args=(megadev, "115200", "1"))
+            t.daemon = True
+            t.start()
+            statoreset = 0
+except KeyboardInterrupt:
+    exit()
